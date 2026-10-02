@@ -1,0 +1,177 @@
+{
+ "actions": [],
+ "creation": "2026-09-30 12:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "guard_section",
+  "enable_batch_rate_guard",
+  "batch_rate_cap_ratio",
+  "check_section",
+  "alert_role",
+  "extra_recipients",
+  "value_tolerance",
+  "gl_check_days",
+  "repair_section",
+  "auto_repair",
+  "max_repair_jobs",
+  "last_run_section",
+  "last_run_on",
+  "last_run_summary",
+  "match_section",
+  "match_last_mode",
+  "match_last_status",
+  "match_last_run_on",
+  "match_last_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1"
+  },
+  {
+   "fieldname": "guard_section",
+   "fieldtype": "Section Break",
+   "label": "Batch Valuation Guard"
+  },
+  {
+   "fieldname": "enable_batch_rate_guard",
+   "fieldtype": "Check",
+   "label": "Enable Batch Rate Guard",
+   "default": "1",
+   "description": "Replaces an invalid batch outgoing rate (negative, overflowing, or far above the last inward rate) during posting and reposting."
+  },
+  {
+   "fieldname": "batch_rate_cap_ratio",
+   "fieldtype": "Float",
+   "label": "Max Rate vs Last Inward Rate (x)",
+   "default": "20",
+   "description": "A suspicious batch rate higher than this multiple of the last inward rate of the batch is replaced."
+  },
+  {
+   "fieldname": "check_section",
+   "fieldtype": "Section Break",
+   "label": "Daily Consistency Check"
+  },
+  {
+   "fieldname": "alert_role",
+   "fieldtype": "Link",
+   "label": "Send Report To Role",
+   "options": "Role",
+   "default": "Stock Manager"
+  },
+  {
+   "fieldname": "extra_recipients",
+   "fieldtype": "Small Text",
+   "label": "Extra Recipients",
+   "description": "Comma-separated email addresses."
+  },
+  {
+   "fieldname": "value_tolerance",
+   "fieldtype": "Currency",
+   "label": "Value Tolerance",
+   "default": "1"
+  },
+  {
+   "fieldname": "gl_check_days",
+   "fieldtype": "Int",
+   "label": "Check GL vs Stock Ledger for Last (Days)",
+   "default": "90"
+  },
+  {
+   "fieldname": "repair_section",
+   "fieldtype": "Section Break",
+   "label": "Automatic Repair"
+  },
+  {
+   "fieldname": "auto_repair",
+   "fieldtype": "Check",
+   "label": "Create Repost Entries Automatically",
+   "default": "0",
+   "description": "For each item-warehouse whose running balance or Bin is out of line, create a Repost Item Valuation from the first wrong entry. For each voucher whose GL differs from the Stock Ledger, create an accounting-only Repost Item Valuation."
+  },
+  {
+   "fieldname": "max_repair_jobs",
+   "fieldtype": "Int",
+   "label": "Max Repost Entries Per Run",
+   "default": "200"
+  },
+  {
+   "fieldname": "last_run_section",
+   "fieldtype": "Section Break",
+   "label": "Last Run"
+  },
+  {
+   "fieldname": "last_run_on",
+   "fieldtype": "Datetime",
+   "label": "Last Run On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_run_summary",
+   "fieldtype": "Long Text",
+   "label": "Last Run Summary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "match_section",
+   "fieldtype": "Section Break",
+   "label": "One-time Match",
+   "description": "Runs the tested one-time correction from inside the site. Use the buttons at the top: Preview (changes nothing), Apply (commits only if every check passes), Undo (restores the backup)."
+  },
+  {
+   "fieldname": "match_last_mode",
+   "fieldtype": "Data",
+   "label": "Last Mode",
+   "read_only": 1
+  },
+  {
+   "fieldname": "match_last_status",
+   "fieldtype": "Data",
+   "label": "Last Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "match_last_run_on",
+   "fieldtype": "Datetime",
+   "label": "Last Run On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "match_last_log",
+   "fieldtype": "Long Text",
+   "label": "Last Log",
+   "read_only": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-01 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Stock Guard",
+ "name": "Stock Guard Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock Manager"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
