@@ -32,6 +32,10 @@
 
 SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION';
 SET @run_at = NOW() + INTERVAL 330 MINUTE;   -- site data is stored in IST; DB server clock is UTC
+-- C6 settings. Stock Guard sets @sg_clear_residue (0/1) before running; from a console it defaults to 1.
+-- @sg_closed_upto = Stock Frozen Up To as it was BEFORE Part A, so closed months are never touched.
+SET @sg_clear_residue = IFNULL(@sg_clear_residue, 1);
+SET @sg_closed_upto = COALESCE((SELECT `value` FROM `tabSingles` WHERE `doctype`='Stock Settings' AND `field`='stock_frozen_upto' AND IFNULL(`value`,'')<>'' LIMIT 1), '1900-01-01');
 
 -- -------------------------------------------------------------------------------------
 -- PART A — Freeze stock posting up to today (committed immediately so users are blocked)
@@ -48,14 +52,15 @@ COMMIT;
 -- PART B — Backup of every column this script changes (for UNDO). DDL auto-commits,
 -- so it runs before the transaction.
 -- -------------------------------------------------------------------------------------
-DROP TABLE IF EXISTS `zz_fix_bk_sle`, `zz_fix_bk_bin`, `zz_fix_bk_sbe`, `zz_fix_bk_sbb`, `zz_fix_bk_batch`, `zz_fix_bk_gl`, `zz_fix_bk_riv`;
-CREATE TABLE `zz_fix_bk_sle`   AS SELECT `name`,`qty_after_transaction`,`stock_value`,`valuation_rate` FROM `tabStock Ledger Entry` WHERE `is_cancelled`=0;
+DROP TABLE IF EXISTS `zz_fix_bk_sle`, `zz_fix_bk_bin`, `zz_fix_bk_sbe`, `zz_fix_bk_sbb`, `zz_fix_bk_batch`, `zz_fix_bk_gl`, `zz_fix_bk_riv`, `zz_fix_bk_run`;
+CREATE TABLE `zz_fix_bk_sle`   AS SELECT `name`,`qty_after_transaction`,`stock_value`,`valuation_rate`,`stock_value_difference` FROM `tabStock Ledger Entry` WHERE `is_cancelled`=0;
 CREATE TABLE `zz_fix_bk_bin`   AS SELECT `name`,`actual_qty`,`projected_qty`,`stock_value`,`valuation_rate` FROM `tabBin`;
 CREATE TABLE `zz_fix_bk_sbe`   AS SELECT `name`,`qty`,`incoming_rate`,`stock_value_difference` FROM `tabSerial and Batch Entry`;
 CREATE TABLE `zz_fix_bk_sbb`   AS SELECT `name`,`total_qty`,`total_amount`,`avg_rate` FROM `tabSerial and Batch Bundle`;
 CREATE TABLE `zz_fix_bk_batch` AS SELECT `name`,`batch_qty` FROM `tabBatch`;
 CREATE TABLE `zz_fix_bk_gl`    AS SELECT `name`,`debit`,`credit`,`debit_in_account_currency`,`credit_in_account_currency`,`debit_in_transaction_currency`,`credit_in_transaction_currency`,`debit_in_reporting_currency`,`credit_in_reporting_currency` FROM `tabGL Entry` WHERE `is_cancelled`=0;
 CREATE TABLE `zz_fix_bk_riv`   AS SELECT `name`,`status` FROM `tabRepost Item Valuation` WHERE `docstatus`=1 AND `status` IN ('Queued','In Progress','Failed');
+CREATE TABLE `zz_fix_bk_run`   AS SELECT @run_at AS `run_at`;
 ALTER TABLE `zz_fix_bk_sle` ADD PRIMARY KEY (`name`);
 ALTER TABLE `zz_fix_bk_gl`  ADD PRIMARY KEY (`name`);
 
@@ -72,6 +77,88 @@ GROUP BY x.company;
 -- =====================================================================================
 SET autocommit = 0;
 START TRANSACTION;
+
+-- C6. Value residue on batches with zero qty (batch-wise valuation). When a batch is fully
+--     issued, its value should be 0 too. Rounding and back-dated rate changes can leave a value
+--     (often negative) on a batch whose qty is 0. That residue sits inside Stock Balance and GL.
+--     It is cleared on the LAST outward movement of that batch in that warehouse:
+--       batch row value  := value - residue      ledger line value := value - residue
+--     and a Stock In Hand / Stock Adjustment GL pair is added on the same voucher and date.
+--     C1 then rebuilds the running value, C3b the bundle header. Movements dated on or before
+--     the original Stock Frozen Up To date are not changed; they are only listed.
+--     Runs only when @sg_clear_residue = 1.
+CREATE TEMPORARY TABLE `tmp_res` (INDEX (batch_no, warehouse)) AS
+SELECT sle.company, sbe.batch_no, sle.item_code, sle.warehouse,
+       ROUND(SUM(sbe.qty), 6) bq, ROUND(SUM(sbe.stock_value_difference), 6) residue
+FROM `tabStock Ledger Entry` sle
+JOIN `tabSerial and Batch Entry` sbe ON sbe.parent = sle.serial_and_batch_bundle
+JOIN `tabBatch` b ON b.name = sbe.batch_no AND b.use_batchwise_valuation = 1
+WHERE sle.is_cancelled = 0 AND IFNULL(sbe.batch_no,'') <> '' AND @sg_clear_residue = 1
+GROUP BY sle.company, sbe.batch_no, sle.item_code, sle.warehouse
+HAVING ABS(SUM(sbe.qty)) <= 0.0001 AND ABS(SUM(sbe.stock_value_difference)) > 0.005;
+
+CREATE TEMPORARY TABLE `tmp_rest` (INDEX (sbe_name), INDEX (sle_name)) AS
+SELECT * FROM (
+  SELECT r.company, r.batch_no, r.item_code, r.warehouse, r.residue,
+         sbe.name sbe_name, sbe.qty sbe_qty, sbe.stock_value_difference sbe_svd,
+         sle.name sle_name, sle.voucher_type, sle.voucher_no, sle.posting_date pd,
+         ROW_NUMBER() OVER (PARTITION BY r.batch_no, r.warehouse
+                            ORDER BY sle.posting_datetime DESC, sle.creation DESC, sle.name DESC) rn
+  FROM `tmp_res` r
+  JOIN `tabStock Ledger Entry` sle ON sle.item_code = r.item_code AND sle.warehouse = r.warehouse AND sle.is_cancelled = 0
+  JOIN `tabSerial and Batch Entry` sbe ON sbe.parent = sle.serial_and_batch_bundle AND sbe.batch_no = r.batch_no
+  WHERE sbe.qty < 0) t
+WHERE rn = 1;
+
+SELECT 'C6 zero-qty batch residue NOT cleared (last outward movement is in a closed period)' AS info,
+       company, item_code, batch_no, warehouse, voucher_no, pd AS posting_date, ROUND(residue,2) AS residue
+FROM `tmp_rest` WHERE pd <= @sg_closed_upto;
+SELECT 'C6 zero-qty batch residue NOT cleared (batch has no outward movement)' AS info,
+       r.company, r.item_code, r.batch_no, r.warehouse, ROUND(r.residue,2) AS residue
+FROM `tmp_res` r WHERE NOT EXISTS (SELECT 1 FROM `tmp_rest` t WHERE t.batch_no = r.batch_no AND t.warehouse = r.warehouse);
+DELETE FROM `tmp_rest` WHERE pd <= @sg_closed_upto;
+
+-- one ledger line can carry several cleared batches: total per line first
+CREATE TEMPORARY TABLE `tmp_resl` (PRIMARY KEY (sle_name)) AS
+SELECT sle_name, MAX(company) company, MAX(voucher_type) voucher_type, MAX(voucher_no) voucher_no, MAX(pd) pd,
+       ROUND(SUM(residue), 6) residue, COUNT(*) batches
+FROM `tmp_rest` GROUP BY sle_name;
+
+SELECT 'C6 zero-qty batch residue cleared' AS step, company, COUNT(*) AS batches, ROUND(SUM(residue),2) AS residue_cleared,
+       ROUND(-SUM(residue),2) AS stock_value_change
+FROM `tmp_rest` GROUP BY company;
+
+UPDATE `tabSerial and Batch Entry` e
+JOIN `tmp_rest` t ON t.sbe_name = e.name
+SET e.stock_value_difference = ROUND(t.sbe_svd - t.residue, 9),
+    e.incoming_rate          = ROUND(ABS((t.sbe_svd - t.residue) / t.sbe_qty), 9);
+SELECT 'C6a Serial and Batch Entry rows corrected' AS step, ROW_COUNT() AS rows_changed;
+
+UPDATE `tabStock Ledger Entry` sle
+JOIN `tmp_resl` l ON l.sle_name = sle.name
+SET sle.stock_value_difference = ROUND(sle.stock_value_difference - l.residue, 9);
+SELECT 'C6b Stock Ledger Entry values corrected' AS step, ROW_COUNT() AS rows_changed;
+
+-- Stock In Hand / Stock Adjustment pair per voucher: Stock In Hand moves by -residue
+CREATE TEMPORARY TABLE `tmp_resv` AS
+SELECT company, voucher_type, voucher_no, MAX(pd) pd, ROUND(-SUM(residue), 2) diff
+FROM `tmp_resl` GROUP BY company, voucher_type, voucher_no HAVING ABS(ROUND(-SUM(residue), 2)) >= 0.01;
+
+INSERT INTO `tabGL Entry` (`name`,`creation`,`modified`,`owner`,`modified_by`,`docstatus`,`idx`,`posting_date`,`transaction_date`,`fiscal_year`,
+  `account`,`account_currency`,`voucher_type`,`voucher_no`,`transaction_currency`,`transaction_exchange_rate`,
+  `debit`,`debit_in_account_currency`,`debit_in_transaction_currency`,`credit`,`credit_in_account_currency`,`credit_in_transaction_currency`,
+  `cost_center`,`company`,`is_opening`,`is_advance`,`is_cancelled`,`to_rename`,`remarks`)
+SELECT CONCAT('GLRES-', LEFT(MD5(CONCAT(r.voucher_no, side.s, @run_at)), 16)), @run_at, @run_at, 'Administrator', 'Administrator', 1, 0, r.pd, r.pd,
+  (SELECT fy.name FROM `tabFiscal Year` fy WHERE r.pd BETWEEN fy.year_start_date AND fy.year_end_date LIMIT 1),
+  IF(side.s='STK', IF(r.company LIKE '%UNIT-I', 'Stock In Hand - SEPLU', 'Stock In Hand - SEPL'),
+                   IF(r.company LIKE '%UNIT-I', 'Stock Adjustment - SEPLU', 'Stock Adjustment - SEPL')),
+  'INR', r.voucher_type, r.voucher_no, 'INR', 1,
+  IF((side.s='STK') = (r.diff > 0), ABS(r.diff), 0), IF((side.s='STK') = (r.diff > 0), ABS(r.diff), 0), IF((side.s='STK') = (r.diff > 0), ABS(r.diff), 0),
+  IF((side.s='STK') = (r.diff > 0), 0, ABS(r.diff)), IF((side.s='STK') = (r.diff > 0), 0, ABS(r.diff)), IF((side.s='STK') = (r.diff > 0), 0, ABS(r.diff)),
+  (SELECT c.cost_center FROM `tabCompany` c WHERE c.name = r.company), r.company, 'No', 'No', 0, 0,
+  'Stock Guard value residue clearance'
+FROM `tmp_resv` r JOIN (SELECT 'STK' s UNION ALL SELECT 'ADJ') side;
+SELECT 'C6c GL rows inserted (value residue clearance)' AS step, ROW_COUNT() AS rows_changed;
 
 -- C1. Stock Ledger Entry: running qty / value / rate = running sum of actual_qty and
 --     stock_value_difference, in ERPNext posting order (posting_datetime, creation).
@@ -283,8 +370,21 @@ SELECT 'D8 batch master <> ledger' AS chk, COUNT(*) AS cnt FROM `tabBatch` b
 LEFT JOIN (SELECT sbe.batch_no, SUM(sbe.qty) led FROM `tabStock Ledger Entry` sle JOIN `tabSerial and Batch Entry` sbe ON sbe.parent=sle.serial_and_batch_bundle WHERE sle.is_cancelled=0 GROUP BY sbe.batch_no) x ON x.batch_no=b.name
 WHERE ABS(IFNULL(x.led,0)-IFNULL(b.batch_qty,0)) > 0.001;
 
+SELECT 'D9 zero-qty batches with value left' AS chk, COUNT(*) AS cnt FROM (
+  SELECT sbe.batch_no, sle.warehouse FROM `tabStock Ledger Entry` sle
+  JOIN `tabSerial and Batch Entry` sbe ON sbe.parent = sle.serial_and_batch_bundle
+  JOIN `tabBatch` b ON b.name = sbe.batch_no AND b.use_batchwise_valuation = 1
+  WHERE sle.is_cancelled = 0
+  GROUP BY sbe.batch_no, sle.warehouse
+  HAVING ABS(SUM(sbe.qty)) <= 0.0001 AND ABS(SUM(sbe.stock_value_difference)) > 0.005) q;
+
+SELECT 'D10 item-warehouses with negative value' AS chk, company, COUNT(*) AS cnt, ROUND(SUM(v),2) AS value FROM (
+  SELECT company, item_code, warehouse, SUM(stock_value_difference) v FROM `tabStock Ledger Entry` WHERE is_cancelled=0
+  GROUP BY company, item_code, warehouse HAVING SUM(stock_value_difference) < -0.01) q GROUP BY company;
+
 -- EXPECTED: D1 ledger_minus_stock_balance = 0 and bin_minus_ledger = 0 (±1);
 --           D3 counts only differences > 0.01; vouchers listed under C4 (> 1 rupee) need GL regeneration from the voucher;
---           D2 = D1 stock_balance (±1); D3..D8 = 0.
+--           D2 = D1 stock_balance (±1); D3..D8 = 0. D9 = only the residues C6 listed as not cleared.
+--           D10 is information: negative value with positive qty needs a dated-today revaluation.
 -- If D6 qty_lines or D7 is not 0: those lines need a batch decision (not auto-fixed); send the list.
 -- Now type   COMMIT;   or   ROLLBACK;

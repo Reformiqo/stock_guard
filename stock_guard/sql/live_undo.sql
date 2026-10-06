@@ -16,6 +16,9 @@ UPDATE `tabGL Entry` s JOIN `zz_fix_bk_gl` b ON b.name=s.name
   SET s.debit=b.debit, s.credit=b.credit, s.debit_in_account_currency=b.debit_in_account_currency, s.credit_in_account_currency=b.credit_in_account_currency,
       s.debit_in_transaction_currency=b.debit_in_transaction_currency, s.credit_in_transaction_currency=b.credit_in_transaction_currency,
       s.debit_in_reporting_currency=b.debit_in_reporting_currency, s.credit_in_reporting_currency=b.credit_in_reporting_currency;
+UPDATE `tabStock Ledger Entry` s JOIN `zz_fix_bk_sle` b ON b.name=s.name
+  SET s.stock_value_difference=b.stock_value_difference WHERE s.stock_value_difference<>b.stock_value_difference;
+DELETE FROM `tabGL Entry` WHERE `name` LIKE 'GLRES-%' AND `remarks`='Stock Guard value residue clearance' AND `creation` >= (SELECT MIN(`run_at`) FROM `zz_fix_bk_run`);
 DELETE FROM `tabGL Entry` WHERE `name` LIKE 'GLFIX-%' AND `remarks` IN ('Stock In Hand aligned to Stock Ledger value','Balancing row for Stock In Hand alignment');
 UPDATE `tabRepost Item Valuation` s JOIN `zz_fix_bk_riv` b ON b.name=s.name SET s.status=b.status;
 DELETE FROM `tabSingles` WHERE `doctype`='Stock Settings' AND `field` IN ('stock_frozen_upto','stock_auth_role');
