@@ -33,7 +33,7 @@ frappe.ui.form.on("Stock Guard Settings", {
 								"corrects the data and commits only if every check passes.</p>",
 						},
 						{ fieldname: "enable_reposting", fieldtype: "Check", label: __("Switch reposting scheduler on after success"), default: 1 },
-						{ fieldname: "apply_settings", fieldtype: "Check", label: __("Apply late-entry settings after success (3-day window, approver role)"), default: 1 },
+						{ fieldname: "apply_settings", fieldtype: "Check", label: __("Apply late-entry settings after success (31-day outer limit, approver role)"), default: 1 },
 						{ fieldname: "confirm", fieldtype: "Data", label: __("Type APPLY to confirm"), reqd: 1 },
 					],
 					primary_action_label: __("Apply"),

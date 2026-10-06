@@ -47,11 +47,37 @@ def run_daily_check():
 	report = build_report(tolerance=tolerance, gl_days=cint(settings.gl_check_days) or 90)
 
 	repairs = {"created": [], "skipped": [], "errors": []}
-	if settings.auto_repair:
-		repairs = create_repairs(report, max_jobs=cint(settings.max_repair_jobs) or 200)
 
-	send_report(settings, report, repairs)
+	if cint(settings.nightly_auto_match) and (report["broken_pairs"] or report["bin_mismatches"]):
+		# The match sets open repost jobs to Skipped. A job still queued or running carries
+		# a revaluation (e.g. a back-dated Purchase Receipt) the match does not redo, so wait.
+		open_reposts = frappe.db.count(
+			"Repost Item Valuation", {"docstatus": 1, "status": ("in", ("Queued", "In Progress"))}
+		)
+		if open_reposts:
+			repairs["auto_match"] = (
+				f"not run, {open_reposts} repost entries still queued or in progress"
+			)
+		else:
+			# Rebuild running balances, Bin and batch records from the entries themselves.
+			# Commits only if every check passes; otherwise it rolls back and reports.
+			from stock_guard.one_time_match import run as run_match
+
+			status = run_match("apply", enable_reposting=0, apply_settings=0, requested_by=None)
+			repairs["auto_match"] = status
+			report = build_report(tolerance=tolerance, gl_days=cint(settings.gl_check_days) or 90)
+
+	if settings.auto_repair:
+		found = create_repairs(report, max_jobs=cint(settings.max_repair_jobs) or 200)
+		for key in ("created", "skipped", "errors"):
+			repairs[key].extend(found.get(key) or [])
+
+	# Save first, so the result is kept even if email is not configured.
 	save_summary(report, repairs)
+	try:
+		send_report(settings, report, repairs)
+	except Exception:
+		frappe.log_error(title="Stock Guard: daily report email not sent", message=frappe.get_traceback())
 	return report
 
 
@@ -442,6 +468,8 @@ def summary_lines(report, repairs, tolerance=1.0):
 		f"Repost entries created now: {len(repairs['created'])}; skipped: {len(repairs['skipped'])}; "
 		f"errors: {len(repairs['errors'])}",
 	]
+	if repairs.get("auto_match"):
+		lines.append(f"Nightly auto match: {repairs['auto_match']}")
 	return lines
 
 
