@@ -31,6 +31,7 @@ A Frappe app for ERPNext v16 that keeps these four sources in line when late (ba
 5. **Per-document back-date window** (1.2.0). Purchase Receipts, and Purchase Invoices that update stock, can be dated up to 30 days back, because they are submitted after QC. Other stock documents (Delivery Note, Sales Invoice with Update Stock, Stock Entry, Stock Reconciliation, Subcontracting Receipt) can be dated up to 3 days back. Users with Stock Settings > Role Allowed to Edit Frozen Stock are not limited.
 6. **GL repost fix** (1.2.0). ERPNext's `get_voucherwise_gl_entries` (in `erpnext/accounts/utils.py`) also counts cancelled GL rows when it decides whether a voucher's GL is already correct. As a result, a voucher can be left without GL. Stock Guard replaces it with a version that only reads active rows, so missing GL is always recreated.
 7. **Nightly self-heal** (1.2.0). If the 06:30 check finds a broken running balance or a Bin difference, it runs the One-time Match (Apply) automatically. The run commits only if every check passes, and it restores the previous Stock Settings afterwards. It waits for another night when repost entries are still queued or in progress, because the match would set them to Skipped. Each run replaces the `zz_fix_bk_*` backup tables, so **Undo** only reverts the latest run.
+8. **Zero-qty batch residue clearance** (1.2.1, step C6 of the One-time Match, off by default). A batch-wise valued batch that has been fully issued can still carry a value, often a negative one. C6 clears it on the batch's last outward Serial and Batch Entry and its Stock Ledger line. On the same voucher and date it posts a `GLRES-` pair: Stock In Hand against Stock Adjustment. Movements on or before the original Stock Frozen Up To date are only listed, never changed. Check D9 then confirms that only those listed residues remain. D10 lists item-warehouses with a negative value, for information. **Undo** restores the ledger values and deletes the `GLRES-` rows; it still works with backups taken by 1.2.0. Switch on **Clear Value Left on Zero-qty Batches** only after Accounts approval. Remember that the nightly self-heal also applies C6 while the setting is on.
 
 ## Install
 
@@ -69,6 +70,7 @@ Go to **Stock Guard Settings**:
 | Purchase Receipt: Max Days Back | 30 | Also used for Purchase Invoices that update stock |
 | Other Stock Documents: Max Days Back | 3 | Every other stock document |
 | Run One-time Match Automatically When a Gap Is Found | On | Nightly self-heal |
+| Clear Value Left on Zero-qty Batches | Off | Step C6: clears the value left on fully issued batches (needs Accounts approval) |
 
 Recommended Stock Settings with the back-date window:
 

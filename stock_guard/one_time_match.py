@@ -133,6 +133,10 @@ def _run_match_inner(log, apply, enable_reposting, apply_settings, parts, execut
 	if blocking:
 		log.add("RESULT", "Stopped before any change. Send the reconciliation list for review.")
 		return "Stopped: pre-check"
+	clear_residue = cint(frappe.db.get_single_value("Stock Guard Settings", "clear_value_residue"))
+	frappe.db.sql("SET @sg_clear_residue = %s", (clear_residue,))
+	log.add("INFO", "Zero-qty batch value residue (C6): " + ("cleared" if clear_residue else "not cleared (setting off)"))
+	executor.clear_residue = clear_residue
 	if apply:
 		_remember_settings()
 		executor.run_block(parts["pre"])
@@ -146,7 +150,7 @@ def _run_match_inner(log, apply, enable_reposting, apply_settings, parts, execut
 	executor.run_block(parts["C"])
 	executor.run_block(parts["D"])
 
-	ok, problems = evaluate(executor.results)
+	ok, problems = evaluate(executor.results, clear_residue=clear_residue)
 	for p in problems:
 		log.add("CHECK FAILED", p)
 
@@ -181,17 +185,30 @@ def _run_match_inner(log, apply, enable_reposting, apply_settings, parts, execut
 
 def _run_undo(log):
 	executor = Executor(log)
-	executor.run_block(_read(UNDO_FILE))
+	statements = split_statements(_read(UNDO_FILE))
+	if not frappe.db.sql("SHOW TABLES LIKE 'zz_fix_bk_run'"):
+		# Backup taken by Stock Guard 1.2.0 or earlier: it has no C6 data to restore.
+		# Only the C6 statements are skipped: the GLRES delete and the Stock Ledger Entry
+		# value restore (the 1.2.0 SLE backup has no stock_value_difference column).
+		statements = [s for s in statements if not _is_c6_undo(s)]
+	for stmt in statements:
+		executor.execute(stmt)
 	frappe.db.commit()
 	frappe.clear_cache()
 	log.add("RESULT", "Undo committed. Values restored from zz_fix_bk_* tables; reposting scheduler stopped again.")
 	return "Undone"
 
 
+def _is_c6_undo(stmt):
+	if "zz_fix_bk_run" in stmt:
+		return True
+	return "`tabStock Ledger Entry`" in stmt and "JOIN `zz_fix_bk_sle`" in stmt and "s.stock_value_difference=b.stock_value_difference" in stmt
+
+
 # ---------------------------------------------------------------- checks
 
 
-def evaluate(results):
+def evaluate(results, clear_residue=0):
 	"""Decide whether the corrected data is consistent. Returns (ok, [problems])."""
 	problems = []
 	by_label = {}
@@ -248,6 +265,14 @@ def evaluate(results):
 		if value:
 			problems.append(f"{label}: {cint(value)}")
 
+	# D9: after C6, only the residues C6 listed as not cleared (closed period / no outward
+	# movement) may remain.
+	if clear_residue:
+		not_cleared = sum(len(v) for k, v in by_label.items() if k.startswith("C6 zero-qty batch residue NOT cleared"))
+		d9 = one("D9 zero-qty batches with value left")
+		if d9 is not None and cint(d9) > not_cleared:
+			problems.append(f"D9 zero-qty batches with value left: {cint(d9)} (only {not_cleared} expected)")
+
 	d6 = by_label.get("D6 ledger lines where batch qty or value differ")
 	if not d6:
 		problems.append("Check 'D6' did not return a result.")
@@ -266,6 +291,7 @@ class Executor:
 	def __init__(self, log):
 		self.log = log
 		self.results = []
+		self.clear_residue = 0
 
 	def run_block(self, text):
 		for stmt in split_statements(text):

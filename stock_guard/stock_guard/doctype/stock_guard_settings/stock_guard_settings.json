@@ -14,6 +14,7 @@
   "backdate_days_default",
   "nightly_section",
   "nightly_auto_match",
+  "clear_value_residue",
   "check_section",
   "alert_role",
   "extra_recipients",
@@ -93,6 +94,13 @@
    "label": "Run One-time Match Automatically When a Gap Is Found",
    "default": "1",
    "description": "Runs with the 06:30 check. It rebuilds running balances, Bin and batch records, and commits only if every check passes. GL differences above the tolerance are reported, not changed."
+  },
+  {
+   "fieldname": "clear_value_residue",
+   "fieldtype": "Check",
+   "label": "Clear Value Left on Zero-qty Batches",
+   "default": "0",
+   "description": "When a batch is fully issued but still carries a value (batch-wise valuation residue), clear that value on the batch's last outward movement and post a Stock In Hand / Stock Adjustment GL pair on the same voucher. Movements in closed periods (on or before Stock Frozen Up To) are only reported. Switch on only after Accounts approval."
   },
   {
    "fieldname": "check_section",
@@ -192,7 +200,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-05 16:00:00",
+ "modified": "2026-10-06 22:30:00",
  "modified_by": "Administrator",
  "module": "Stock Guard",
  "name": "Stock Guard Settings",
