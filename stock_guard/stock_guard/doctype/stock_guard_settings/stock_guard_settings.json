@@ -8,6 +8,12 @@
   "guard_section",
   "enable_batch_rate_guard",
   "batch_rate_cap_ratio",
+  "backdate_section",
+  "enable_backdate_rule",
+  "backdate_days_purchase_receipt",
+  "backdate_days_default",
+  "nightly_section",
+  "nightly_auto_match",
   "check_section",
   "alert_role",
   "extra_recipients",
@@ -50,6 +56,43 @@
    "label": "Max Rate vs Last Inward Rate (x)",
    "default": "20",
    "description": "A suspicious batch rate higher than this multiple of the last inward rate of the batch is replaced."
+  },
+  {
+   "fieldname": "backdate_section",
+   "fieldtype": "Section Break",
+   "label": "Back-dated Entries"
+  },
+  {
+   "fieldname": "enable_backdate_rule",
+   "fieldtype": "Check",
+   "label": "Enable Back-date Window",
+   "default": "1",
+   "description": "Users with the role in Stock Settings > Role Allowed to Edit Frozen Stock are not limited."
+  },
+  {
+   "fieldname": "backdate_days_purchase_receipt",
+   "fieldtype": "Int",
+   "label": "Purchase Receipt: Max Days Back",
+   "default": "30",
+   "description": "Purchase Receipts (and Purchase Invoices that update stock) are submitted after QC, so they need a longer window."
+  },
+  {
+   "fieldname": "backdate_days_default",
+   "fieldtype": "Int",
+   "label": "Other Stock Documents: Max Days Back",
+   "default": "3"
+  },
+  {
+   "fieldname": "nightly_section",
+   "fieldtype": "Section Break",
+   "label": "Nightly Self-heal"
+  },
+  {
+   "fieldname": "nightly_auto_match",
+   "fieldtype": "Check",
+   "label": "Run One-time Match Automatically When a Gap Is Found",
+   "default": "1",
+   "description": "Runs with the 06:30 check. It rebuilds running balances, Bin and batch records, and commits only if every check passes. GL differences above the tolerance are reported, not changed."
   },
   {
    "fieldname": "check_section",
@@ -149,7 +192,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-01 12:00:00",
+ "modified": "2026-10-05 16:00:00",
  "modified_by": "Administrator",
  "module": "Stock Guard",
  "name": "Stock Guard Settings",

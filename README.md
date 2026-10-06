@@ -27,6 +27,10 @@ A Frappe app for ERPNext v16 that keeps these four sources in line when late (ba
    - **Preview** changes nothing.
    - **Apply** freezes posting, takes backup tables and corrects the data. It commits only if every check passes, then optionally switches reposting on and applies the late-entry settings.
    - **Undo** restores the backup.
+   - Vouchers whose GL differs from the ledger by more than ₹1 are reported and left unchanged (they need a source-document fix). They no longer block Apply.
+5. **Per-document back-date window** (1.2.0). Purchase Receipts, and Purchase Invoices that update stock, can be dated up to 30 days back, because they are submitted after QC. Other stock documents (Delivery Note, Sales Invoice with Update Stock, Stock Entry, Stock Reconciliation, Subcontracting Receipt) can be dated up to 3 days back. Users with Stock Settings > Role Allowed to Edit Frozen Stock are not limited.
+6. **GL repost fix** (1.2.0). ERPNext's `get_voucherwise_gl_entries` (in `erpnext/accounts/utils.py`) also counts cancelled GL rows when it decides whether a voucher's GL is already correct. As a result, a voucher can be left without GL. Stock Guard replaces it with a version that only reads active rows, so missing GL is always recreated.
+7. **Nightly self-heal** (1.2.0). If the 06:30 check finds a broken running balance or a Bin difference, it runs the One-time Match (Apply) automatically. The run commits only if every check passes, and it restores the previous Stock Settings afterwards. It waits for another night when repost entries are still queued or in progress, because the match would set them to Skipped. Each run replaces the `zz_fix_bk_*` backup tables, so **Undo** only reverts the latest run.
 
 ## Install
 
@@ -61,6 +65,19 @@ Go to **Stock Guard Settings**:
 | Check GL vs Stock Ledger for Last (Days) | 90 | Window for the voucher-level GL check |
 | Create Repost Entries Automatically | Off | Turns on automatic repair |
 | Max Repost Entries Per Run | 200 | Safety limit |
+| Enable Back-date Window | On | Turns the per-document back-date window on or off |
+| Purchase Receipt: Max Days Back | 30 | Also used for Purchase Invoices that update stock |
+| Other Stock Documents: Max Days Back | 3 | Every other stock document |
+| Run One-time Match Automatically When a Gap Is Found | On | Nightly self-heal |
+
+Recommended Stock Settings with the back-date window:
+
+| Field | Value |
+|---|---|
+| Stock Frozen Up To | Last closed month end |
+| Stock Frozen Up To Days | 31 (hard outer limit; Stock Guard applies the 30 / 3-day windows inside it) |
+| Role Allowed to Edit Frozen Stock | Stock Backdate Approver |
+| Role Allowed to Create/Edit Back-dated Transactions | blank |
 
 Click **Run Check Now** on the settings form to run the check straight away.
 
@@ -73,3 +90,5 @@ python -m unittest stock_guard.tests.test_rate_rules
 ## After a `bench update`
 
 Check that `BatchNoValuation.set_stock_value_difference` in `erpnext/stock/serial_batch_bundle.py` still matches the loop in `stock_guard/overrides/batch_valuation.py`. If core has changed that method, the guard must be updated, or disabled in the settings.
+
+Also check that `get_voucherwise_gl_entries` in `erpnext/accounts/utils.py` still has the same signature and return shape as `stock_guard/overrides/gl_repost.py`.

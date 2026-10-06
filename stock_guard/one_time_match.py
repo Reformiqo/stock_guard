@@ -171,6 +171,9 @@ def _run_match_inner(log, apply, enable_reposting, apply_settings, parts, execut
 		log.add("INFO", "Reposting scheduler switched on: run_parallel_reposting, repost_entries.")
 	if apply_settings:
 		_apply_late_entry_settings(log)
+	else:
+		# Part A froze posting for the run; put the previous Stock Settings back.
+		_restore_settings(log)
 	frappe.db.commit()
 	frappe.clear_cache()
 	return "Applied"
@@ -215,9 +218,23 @@ def evaluate(results):
 		if abs(flt(r["bin_minus_ledger"])) > TOLERANCE:
 			problems.append(f"{r['company']}: Bin differs from ledger closing by {r['bin_minus_ledger']}")
 
+	# Vouchers whose GL differs from the ledger by more than 1 rupee are reported by the
+	# script (C4) and not changed; they need a source-document fix. Allow for them here so
+	# they do not block the stock corrections, and report them instead.
+	known_gl_gap = {}
+	for rows in results:
+		for r in rows:
+			first = str(list(r.values())[0]) if r else ""
+			if first.startswith("C4 vouchers with GL"):
+				known_gl_gap[r.get("company")] = known_gl_gap.get(r.get("company"), 0.0) + flt(r.get("diff"))
+
 	for r in by_label.get("D2 GL Stock In Hand") or []:
 		company = frappe.db.get_value("Account", r["account"], "company")
-		if company in stock_balance and abs(flt(r["gl_value"]) - stock_balance[company]) > TOLERANCE:
+		if company not in stock_balance:
+			continue
+		gap = flt(r["gl_value"]) - stock_balance[company]
+		reported = known_gl_gap.get(company, 0.0)
+		if abs(gap + reported) > TOLERANCE and abs(gap) > TOLERANCE:
 			problems.append(f"{company}: GL Stock In Hand {r['gl_value']} differs from Stock Balance {stock_balance[company]}")
 
 	for label in (
@@ -385,12 +402,16 @@ def _restore_settings(log):
 
 
 def _apply_late_entry_settings(log):
-	"""Late-entry rules from the plan: 3 days open for everyone, older needs the approver role."""
+	"""Late-entry rules: 31 days is the hard outer limit in core; Stock Guard applies the
+	per-document windows (Purchase Receipt 30 days, others 3 days) inside it. Older entries
+	need the approver role. Part A froze posting up to today, so the previous
+	Stock Frozen Up To (the last closed month end) is put back."""
+	before = frappe.cache.get_value("stock_guard:stock_settings_before") or {}
 	frappe.db.set_single_value(
 		"Stock Settings",
 		{
-			"stock_frozen_upto": None,
-			"stock_frozen_upto_days": 4,
+			"stock_frozen_upto": before.get("stock_frozen_upto"),
+			"stock_frozen_upto_days": 31,
 			"stock_auth_role": "Stock Backdate Approver",
 		},
 	)
@@ -398,8 +419,8 @@ def _apply_late_entry_settings(log):
 	frappe.clear_document_cache("Stock Settings", "Stock Settings")
 	log.add(
 		"INFO",
-		"Stock Settings: Stock Frozen Up To cleared, Stock Frozen Up To Days = 4, "
-		"Role Allowed to Edit Frozen Stock = Stock Backdate Approver. "
+		f"Stock Settings: Stock Frozen Up To = {before.get('stock_frozen_upto') or 'blank'}, "
+		"Stock Frozen Up To Days = 31, Role Allowed to Edit Frozen Stock = Stock Backdate Approver. "
 		"Stock Reposting Settings: Notify Reposting Error to Role = Stock Manager.",
 	)
 
@@ -439,9 +460,12 @@ def _notify(mode, status, text, requested_by):
 	if not recipients:
 		return
 	body = "<pre style='white-space:pre-wrap'>" + frappe.utils.escape_html(text[-60000:]) + "</pre>"
-	frappe.sendmail(
-		recipients=sorted(recipients),
-		subject=f"Stock Guard one-time match ({mode}): {status}",
-		message=body,
-		now=True,
-	)
+	try:
+		frappe.sendmail(
+			recipients=sorted(recipients),
+			subject=f"Stock Guard one-time match ({mode}): {status}",
+			message=body,
+			now=True,
+		)
+	except Exception:
+		frappe.log_error(title="Stock Guard: one-time match email not sent", message=frappe.get_traceback())

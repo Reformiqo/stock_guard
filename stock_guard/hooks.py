@@ -15,8 +15,28 @@ after_migrate = "stock_guard.install.after_install"
 
 # Apply the batch valuation guard in every web request and every background job.
 # Stock reposting runs as a background job, so before_job is the important one.
-before_request = ["stock_guard.overrides.batch_valuation.apply"]
-before_job = ["stock_guard.overrides.batch_valuation.apply"]
+before_request = [
+	"stock_guard.overrides.batch_valuation.apply",
+	"stock_guard.overrides.gl_repost.apply",
+]
+before_job = [
+	"stock_guard.overrides.batch_valuation.apply",
+	"stock_guard.overrides.gl_repost.apply",
+]
+
+# Per-document back-date window (Purchase Receipt can be longer because of QC).
+doc_events = {
+	dt: {"validate": "stock_guard.backdate.validate_backdate"}
+	for dt in (
+		"Purchase Receipt",
+		"Purchase Invoice",
+		"Delivery Note",
+		"Sales Invoice",
+		"Stock Entry",
+		"Stock Reconciliation",
+		"Subcontracting Receipt",
+	)
+}
 
 scheduler_events = {
 	"cron": {
